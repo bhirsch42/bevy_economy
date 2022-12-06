@@ -1,211 +1,223 @@
-use std::{
-    cmp::{max, min},
-    collections::HashMap,
-};
+use anyhow::Result;
+use diesel::prelude::*;
+use diesel::{sqlite::SqliteConnection, Connection, RunQueryDsl};
 
-use average::Mean;
-use bevy::prelude::*;
-use float_ord::FloatOrd;
-use rand::{thread_rng, Rng};
+pub mod models;
+pub mod tables;
 
-const DEFAULT_INIT_PRICE: Price = 100.0;
-const DEFAULT_HISTORICAL_PRICE_TRADE_COUNT: usize = 10;
-const DEFAULT_PRICE_RELAXATION: f32 = 0.1;
-const DEFAULT_INVENTORY_SPACE_PER_COMMODITY: u32 = 100;
-
-pub struct EconomyPlugin;
-
-impl Plugin for EconomyPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_system(hello_world);
-    }
+fn establish_connection() -> Result<SqliteConnection, diesel::ConnectionError> {
+    SqliteConnection::establish(":memory:")
+}
+fn init_tables() -> Result<usize> {
+    let mut conn = establish_connection()?;
+    let result = diesel::sql_query(include_str!("../src/create_tables.sql")).execute(&mut conn)?;
+    Ok(result)
 }
 
-type Id = u32;
-type Price = f32;
-type Quantity = u32;
+// use std::{
+//     cmp::{max, min},
+//     collections::HashMap,
+// };
 
-pub struct Commodity {
-    id: Id,
-    name: String,
-}
+// use average::Mean;
+// use bevy::prelude::*;
+// use float_ord::FloatOrd;
+// use rand::{thread_rng, Rng};
 
-enum OfferType {
-    Buy,
-    Sell,
-}
+// const DEFAULT_INIT_PRICE: Price = 100.0;
+// const DEFAULT_HISTORICAL_PRICE_TRADE_COUNT: usize = 10;
+// const DEFAULT_PRICE_RELAXATION: f32 = 0.1;
+// const DEFAULT_INVENTORY_SPACE_PER_COMMODITY: u32 = 100;
 
-pub struct Offer {
-    offer_type: OfferType,
-    price: Price,
-    quantity: Quantity,
-    agent_id: Id,
-}
+// pub struct EconomyPlugin;
 
-#[derive(Clone, Copy)]
-struct PriceBelief {
-    min: Price,
-    max: Price,
-}
+// impl Plugin for EconomyPlugin {
+//     fn build(&self, app: &mut App) {
+//         app.add_system(hello_world);
+//     }
+// }
 
-struct Trade {
-    commodity_id: Id,
-    price: Price,
-    quantity: Quantity,
-}
+// pub struct Commodity {
+//     id: Id,
+//     name: String,
+// }
 
-struct Market {
-    trades: Vec<Trade>,
-    historical_trade_eval_count: usize,
-    default_price: f32,
-}
+// enum OfferType {
+//     Buy,
+//     Sell,
+// }
 
-impl Default for Market {
-    fn default() -> Self {
-        Self {
-            trades: vec![],
-            historical_trade_eval_count: DEFAULT_HISTORICAL_PRICE_TRADE_COUNT,
-            default_price: DEFAULT_INIT_PRICE,
-        }
-    }
-}
+// pub struct Offer {
+//     offer_type: OfferType,
+//     price: Price,
+//     quantity: Quantity,
+//     agent_id: Id,
+// }
 
-impl Market {
-    fn get_historical_price(&self, commodity: &Commodity) -> Price {
-        let recent_trades: Mean = self
-            .trades
-            .iter()
-            .rev()
-            .filter(|trade| trade.commodity_id == commodity.id)
-            .map(|trade| trade.price)
-            .take(self.historical_trade_eval_count)
-            .map(f64::from)
-            .collect();
+// #[derive(Clone, Copy)]
+// struct PriceBelief {
+//     min: Price,
+//     max: Price,
+// }
 
-        if (recent_trades.is_empty()) {
-            self.default_price
-        } else {
-            recent_trades.mean() as f32
-        }
-    }
-}
+// struct Trade {
+//     commodity_id: Id,
+//     price: Price,
+//     quantity: Quantity,
+// }
 
-pub struct Agent {
-    price_beliefs: HashMap<Id, PriceBelief>,
-    inventory: HashMap<Id, Quantity>,
-    market: Market,
-    id: Id,
-}
+// struct Market {
+//     trades: Vec<Trade>,
+//     historical_trade_eval_count: usize,
+//     default_price: f32,
+// }
 
-fn cmp_offers(offer1: &&Offer, offer2: &&Offer) -> std::cmp::Ordering {
-    FloatOrd(offer1.price).cmp(&FloatOrd(offer2.price))
-}
+// impl Default for Market {
+//     fn default() -> Self {
+//         Self {
+//             trades: vec![],
+//             historical_trade_eval_count: DEFAULT_HISTORICAL_PRICE_TRADE_COUNT,
+//             default_price: DEFAULT_INIT_PRICE,
+//         }
+//     }
+// }
 
-fn process_offers(offers: Vec<Offer>) {
-    let mut buy_offers: Vec<&Offer> = vec![];
-    let mut sell_offers: Vec<&Offer> = vec![];
+// impl Market {
+//     fn get_historical_price(&self, commodity: &Commodity) -> Price {
+//         let recent_trades: Mean = self
+//             .trades
+//             .iter()
+//             .rev()
+//             .filter(|trade| trade.commodity_id == commodity.id)
+//             .map(|trade| trade.price)
+//             .take(self.historical_trade_eval_count)
+//             .map(f64::from)
+//             .collect();
 
-    offers.iter().for_each(|offer| match offer.offer_type {
-        OfferType::Buy => buy_offers.push(offer),
-        OfferType::Sell => sell_offers.push(offer),
-    });
+//         if recent_trades.is_empty() {
+//             self.default_price
+//         } else {
+//             recent_trades.mean() as f32
+//         }
+//     }
+// }
 
-    buy_offers.sort_by(cmp_offers);
-    buy_offers.reverse();
-    sell_offers.sort_by(cmp_offers);
+// pub struct Agent {
+//     price_beliefs: HashMap<Id, PriceBelief>,
+//     inventory: HashMap<Id, Quantity>,
+//     market: Market,
+//     id: Id,
+// }
 
-    while !buy_offers.is_empty() && !sell_offers.is_empty() {
-        let buy_offer = buy_offers.first().unwrap();
-        let sell_offer = sell_offers.first().unwrap();
-        let quantity_to_trade = min(buy_offer.quantity, sell_offer.quantity);
-        let clearing_price = (buy_offer.price + sell_offer.price) / 2.;
-    }
-}
+// fn cmp_offers(offer1: &&Offer, offer2: &&Offer) -> std::cmp::Ordering {
+//     FloatOrd(offer1.price).cmp(&FloatOrd(offer2.price))
+// }
 
-impl Agent {
-    fn price_belief_for(&self, commodity: &Commodity) -> PriceBelief {
-        let price_belief = self.price_beliefs.get(&commodity.id);
+// fn process_offers(offers: Vec<Offer>) {
+//     let mut buy_offers: Vec<&Offer> = vec![];
+//     let mut sell_offers: Vec<&Offer> = vec![];
 
-        if let Some(belief) = price_belief {
-            *belief
-        } else {
-            let price = self.market.get_historical_price(commodity);
-            PriceBelief {
-                min: price * (1. - DEFAULT_PRICE_RELAXATION),
-                max: price * (1. + DEFAULT_PRICE_RELAXATION),
-            }
-        }
-    }
+//     offers.iter().for_each(|offer| match offer.offer_type {
+//         OfferType::Buy => buy_offers.push(offer),
+//         OfferType::Sell => sell_offers.push(offer),
+//     });
 
-    fn price_for(&self, commodity: &Commodity) -> Price {
-        let price_belief = self.price_belief_for(&commodity);
-        thread_rng().gen_range(price_belief.min..price_belief.max)
-    }
+//     buy_offers.sort_by(cmp_offers);
+//     buy_offers.reverse();
+//     sell_offers.sort_by(cmp_offers);
 
-    fn inventory_quantity_of(&self, commodity: &Commodity) -> Quantity {
-        match self.inventory.get(&commodity.id) {
-            Some(quantity) => *quantity,
-            None => 0,
-        }
-    }
+//     while !buy_offers.is_empty() && !sell_offers.is_empty() {
+//         let buy_offer = buy_offers.first().unwrap();
+//         let sell_offer = sell_offers.first().unwrap();
+//         let quantity_to_trade = min(buy_offer.quantity, sell_offer.quantity);
+//         let clearing_price = (buy_offer.price + sell_offer.price) / 2.;
+//     }
+// }
 
-    fn inventory_space_for(&self, commodity: &Commodity) -> Quantity {
-        DEFAULT_INVENTORY_SPACE_PER_COMMODITY - self.inventory_quantity_of(commodity)
-    }
+// impl Agent {
+//     fn price_belief_for(&self, commodity: &Commodity) -> PriceBelief {
+//         let price_belief = self.price_beliefs.get(&commodity.id);
 
-    fn favorability_of_selling(&self, commodity: &Commodity) -> f32 {
-        let historical_price = self.market.get_historical_price(commodity);
-        let price_belief = self.price_belief_for(commodity);
-        let favorability =
-            (historical_price - price_belief.min) / (price_belief.max - price_belief.min);
-        favorability.clamp(0., 1.)
-    }
+//         if let Some(belief) = price_belief {
+//             *belief
+//         } else {
+//             let price = self.market.get_historical_price(commodity);
+//             PriceBelief {
+//                 min: price * (1. - DEFAULT_PRICE_RELAXATION),
+//                 max: price * (1. + DEFAULT_PRICE_RELAXATION),
+//             }
+//         }
+//     }
 
-    fn favorability_of_buying(&self, commodity: &Commodity) -> f32 {
-        1. - self.favorability_of_selling(commodity)
-    }
+//     fn price_for(&self, commodity: &Commodity) -> Price {
+//         let price_belief = self.price_belief_for(&commodity);
+//         thread_rng().gen_range(price_belief.min..price_belief.max)
+//     }
 
-    fn sell_quantity_for(&self, commodity: &Commodity) -> Quantity {
-        let favorability = self.favorability_of_selling(commodity);
-        let quantity = self.inventory_quantity_of(commodity);
-        ((quantity as f32) * favorability) as Quantity
-    }
+//     fn inventory_quantity_of(&self, commodity: &Commodity) -> Quantity {
+//         match self.inventory.get(&commodity.id) {
+//             Some(quantity) => *quantity,
+//             None => 0,
+//         }
+//     }
 
-    fn buy_quantity_for(&self, commodity: &Commodity) -> Quantity {
-        let favorability = self.favorability_of_buying(commodity);
-        let quantity = self.inventory_space_for(commodity);
-        ((quantity as f32) * favorability) as Quantity
-    }
+//     fn inventory_space_for(&self, commodity: &Commodity) -> Quantity {
+//         DEFAULT_INVENTORY_SPACE_PER_COMMODITY - self.inventory_quantity_of(commodity)
+//     }
 
-    pub fn create_bid(&self, commodity: &Commodity, limit: Quantity) -> Offer {
-        Offer {
-            offer_type: OfferType::Buy,
-            price: self.price_for(commodity),
-            quantity: min(self.buy_quantity_for(commodity), limit),
-            agent_id: self.id,
-        }
-    }
+//     fn favorability_of_selling(&self, commodity: &Commodity) -> f32 {
+//         let historical_price = self.market.get_historical_price(commodity);
+//         let price_belief = self.price_belief_for(commodity);
+//         let favorability =
+//             (historical_price - price_belief.min) / (price_belief.max - price_belief.min);
+//         favorability.clamp(0., 1.)
+//     }
 
-    pub fn create_sale(&self, commodity: &Commodity, limit: Quantity) -> Offer {
-        Offer {
-            offer_type: OfferType::Sell,
-            price: self.price_for(commodity),
-            quantity: max(self.sell_quantity_for(commodity), limit),
-            agent_id: self.id,
-        }
-    }
-}
+//     fn favorability_of_buying(&self, commodity: &Commodity) -> f32 {
+//         1. - self.favorability_of_selling(commodity)
+//     }
 
-fn hello_world() {
-    println!("Hello, world!");
-}
+//     fn sell_quantity_for(&self, commodity: &Commodity) -> Quantity {
+//         let favorability = self.favorability_of_selling(commodity);
+//         let quantity = self.inventory_quantity_of(commodity);
+//         ((quantity as f32) * favorability) as Quantity
+//     }
 
-/*
- * Each agent maintains a set of price beliefs
- * Each price belief has an upper and lower bound
- * Bid by selecting price uniformly randomly within those bounds
- * If good outcome, narrow bounds around mean
- * If bad outcome, increase interval around mean OR translate mean
- * When an agent wishes to create an offer, it will need to
- *  determine the commodity to trade, a fair price, and the quantity of the commodity to trade.
- */
+//     fn buy_quantity_for(&self, commodity: &Commodity) -> Quantity {
+//         let favorability = self.favorability_of_buying(commodity);
+//         let quantity = self.inventory_space_for(commodity);
+//         ((quantity as f32) * favorability) as Quantity
+//     }
+
+//     pub fn create_bid(&self, commodity: &Commodity, limit: Quantity) -> Offer {
+//         Offer {
+//             offer_type: OfferType::Buy,
+//             price: self.price_for(commodity),
+//             quantity: min(self.buy_quantity_for(commodity), limit),
+//             agent_id: self.id,
+//         }
+//     }
+
+//     pub fn create_sale(&self, commodity: &Commodity, limit: Quantity) -> Offer {
+//         Offer {
+//             offer_type: OfferType::Sell,
+//             price: self.price_for(commodity),
+//             quantity: max(self.sell_quantity_for(commodity), limit),
+//             agent_id: self.id,
+//         }
+//     }
+// }
+
+// fn hello_world() {
+//     println!("Hello, world!");
+// }
+
+// /*
+//  * Each agent maintains a set of price beliefs
+//  * Each price belief has an upper and lower bound
+//  * Bid by selecting price uniformly randomly within those bounds
+//  * If good outcome, narrow bounds around mean
+//  * If bad outcome, increase interval around mean OR translate mean
+//  * When an agent wishes to create an offer, it will need to
+//  *  determine the commodity to trade, a fair price, and the quantity of the commodity to trade.
+//  */
