@@ -1,0 +1,23 @@
+[package]
+name = "bevy_economy"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path="src/lib.rs"
+
+[dependencies]
+average = "0.13.1"
+bevy = "0.9.1"
+float-ord = "0.3.2"
+rand = "0.8.5"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+# opt-level = 0
+opt-level = 3
+
+[[example]]
+name = "small_market"
