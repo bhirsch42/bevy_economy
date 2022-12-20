@@ -2,7 +2,6 @@ extern crate bevy_economy;
 
 use bevy::{prelude::*, window::close_on_esc};
 use bevy_economy::EconomyPlugin;
-use fake::Fake;
 
 fn main() {
     App::new()
