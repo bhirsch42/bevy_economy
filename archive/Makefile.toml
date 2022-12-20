@@ -1,0 +1,16 @@
+[tasks.db_init]
+script = [
+  "mkdir -p tmp/",
+  "rm -f tmp/db.sqlite",
+  "touch tmp/db.sqlite",
+  "cat src/create_tables.sql | sqlite3 tmp/db.sqlite",
+]
+
+[tasks.generate]
+script = [
+  "touch src/tables.rs",
+  "diesel print-schema --database-url sqlite://tmp/db.sqlite > src/tables.rs",
+]
+
+[tasks.init_and_generate]
+dependencies = ["db_init", "generate"]
